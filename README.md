@@ -1,6 +1,6 @@
-# 🏢 CRM Pipeline Health Monitor — n8n Automation
+# 🏢 CRM Pipeline Health Monitor via n8n Automation
 
-> A weekly CRM health monitoring workflow that pulls data from HubSpot, runs business health checks, detects revenue risk, tracks CRM data quality, forecasts pipeline coverage, and delivers a structured Slack report, Google Sheets audit log, risk-detail register, and AI executive summary — every Monday morning using free-tier tools.
+> A weekly CRM health monitoring workflow that pulls data from HubSpot, runs business health checks, detects revenue risk, tracks CRM data quality, forecasts pipeline coverage, and delivers a structured Slack report, Google Sheets audit log, risk-detail register, and AI executive summary every Monday morning using free-tier tools.
 
 ![n8n](https://img.shields.io/badge/n8n-self--hosted-orange)
 ![HubSpot](https://img.shields.io/badge/CRM-HubSpot%20Free-red)
