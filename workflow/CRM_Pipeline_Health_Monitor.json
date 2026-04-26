@@ -1,0 +1,967 @@
+{
+  "name": "CRM Pipeline Health Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 7
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -464,
+        160
+      ],
+      "id": "6c2fe0df-d449-498b-82ea-bc2357d29593",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"filterGroups\": [\n    {\n      \"filters\": [\n        {\n          \"propertyName\": \"createdate\",\n          \"operator\": \"GTE\",\n          \"value\": \"2026-01-01\"\n        }\n      ]\n    }\n  ],\n  \"properties\": [\n    \"firstname\",\n    \"lastname\",\n    \"email\",\n    \"phone\",\n    \"mobilephone\",\n    \"hubspot_owner_id\",\n    \"createdate\",\n    \"notes_last_activity\",\n    \"hs_lead_status\"\n  ],\n  \"limit\": 100\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -224,
+        -272
+      ],
+      "id": "c9c3bc9c-7314-4e68-9524-e1ebb5f3c031",
+      "name": "Fetch Recent Contacts",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "YOUR_HUBSPOT_CREDENTIAL_ID",
+          "name": "YOUR_HUBSPOT_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api.hubapi.com/crm/v3/owners",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -224,
+        352
+      ],
+      "id": "6fd678a0-434b-46b0-bb1f-7ffddff7a0f2",
+      "name": "Fetch Owners",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "YOUR_HUBSPOT_CREDENTIAL_ID",
+          "name": "YOUR_HUBSPOT_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api.hubapi.com/crm/v3/pipelines/deals",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -224,
+        -32
+      ],
+      "id": "b665358a-099c-434a-a394-7a49c0a15072",
+      "name": "Fetch Pipeline Stages",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "YOUR_HUBSPOT_CREDENTIAL_ID",
+          "name": "YOUR_HUBSPOT_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/deals/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"filterGroups\": [\n    {\n      \"filters\": [\n        {\n          \"propertyName\": \"dealstage\",\n          \"operator\": \"NOT_IN\",\n          \"values\": [\"closedwon\", \"closedlost\"]\n        }\n      ]\n    }\n  ],\n  \"properties\": [\n    \"dealname\",\n    \"amount\",\n    \"closedate\",\n    \"dealstage\",\n    \"hubspot_owner_id\",\n    \"hs_lastmodifieddate\",\n    \"notes_last_activity\",\n    \"createdate\",\n    \"pipeline\"\n  ],\n  \"limit\": 100\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -224,
+        160
+      ],
+      "id": "db7d3e0c-e01a-4d63-815a-0ecc3e9859c8",
+      "name": "Fetch Open Deals",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_HEADER_AUTH_ID",
+          "name": "YOUR_HEADER_AUTH_NAME"
+        },
+        "httpBearerAuth": {
+          "id": "YOUR_HUBSPOT_CREDENTIAL_ID",
+          "name": "YOUR_HUBSPOT_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = $input.all();\n\nlet deals = [];\nlet contacts = [];\nlet owners = [];\nlet pipeline = null;\nlet closedDeals = [];\nlet lastWeekRows = [];\n\nallItems.forEach(item => {\n  const data = item.json;\n  if (!data || data.skipped) return;\n\n  // Detect pipeline — has stages array\n  if (data.results?.[0]?.stages !== undefined) {\n    pipeline = data.results[0];\n    return;\n  }\n\n  // Detect owners — results with firstName\n  if (data.results?.[0]?.firstName !== undefined) {\n    owners = data.results;\n    return;\n  }\n\n  // Detect deals vs closed deals\n  if (data.results?.[0]?.properties?.dealname !== undefined) {\n    const hasClosedDeals = data.results.some(d =>\n      d.properties.dealstage === 'closedwon' ||\n      d.properties.dealstage === 'closedlost'\n    );\n\n    const hasOpenDeals = data.results.some(d =>\n      d.properties.dealstage !== 'closedwon' &&\n      d.properties.dealstage !== 'closedlost'\n    );\n\n    if (hasClosedDeals && !hasOpenDeals) {\n      closedDeals = data.results;\n    } else {\n      deals = data.results;\n    }\n\n    return;\n  }\n\n  // Detect contacts\n  if (data.results?.[0]?.properties?.firstname !== undefined) {\n    contacts = data.results;\n    return;\n  }\n\n  // Detect audit log rows\n  if (data.week !== undefined || data.total_pipeline_value !== undefined) {\n    lastWeekRows.push(item);\n    return;\n  }\n});\n\n// ---------- HELPERS ----------\n\nfunction safeDate(value) {\n  if (!value) return null;\n  const d = new Date(value);\n  return isNaN(d.getTime()) ? null : d;\n}\n\nfunction daysBetween(laterDate, earlierDate) {\n  if (!earlierDate) return 0;\n  return Math.floor((laterDate - earlierDate) / (1000 * 60 * 60 * 24));\n}\n\nfunction money(value) {\n  return parseFloat(value) || 0;\n}\n\n// ---------- OWNER LOOKUP ----------\n\nconst ownerMap = {};\nowners.forEach(o => {\n  ownerMap[o.id] = `${o.firstName || ''} ${o.lastName || ''}`.trim() || 'Unassigned';\n});\n\n// ---------- PIPELINE / STAGE METADATA ----------\n\nconst closedStages = new Set();\nconst stageMetadata = {};\n\nif (pipeline) {\n  pipeline.stages.forEach(s => {\n    stageMetadata[s.id] = {\n      label: s.label,\n      probability: parseFloat(s.metadata?.probability) || 0.2,\n      isClosed: s.metadata?.isClosed === 'true'\n    };\n\n    if (s.metadata?.isClosed === 'true') {\n      closedStages.add(s.id);\n    }\n  });\n}\n\nconst now = new Date();\n\n// ---------- RUN MODE CONFIGURATION ----------\n// crm_mode comes from the \"Set Run Mode\" node.\n// Use \"demo\" to force all detection branches to appear immediately.\n// Use \"production\" for realistic operational thresholds.\n\nconst modeItem = allItems.find(item => item.json.crm_mode)?.json || {};\nconst CRM_MODE = modeItem.crm_mode || 'production';\n\nconst DEMO_MODE = CRM_MODE === 'demo';\n\nconst IDLE_DAYS = DEMO_MODE ? 0 : 14;\nconst STUCK_DAYS = DEMO_MODE ? 0 : 30;\nconst UNCONTACTED_DAYS = DEMO_MODE ? 0 : 7;\n\nconst MONTHLY_TARGET = 150000;\n\n// ---------- CHECK 1 — IDLE DEALS ----------\n\nconst idleDeals = [];\n\ndeals.forEach(deal => {\n  const props = deal.properties;\n  if (closedStages.has(props.dealstage)) return;\n\n  const lastActivity =\n    safeDate(props.notes_last_activity) ||\n    safeDate(props.hs_lastmodifieddate) ||\n    safeDate(props.createdate);\n\n  const daysSince = daysBetween(now, lastActivity);\n\n  if (daysSince >= IDLE_DAYS) {\n    idleDeals.push({\n      name: props.dealname || 'Unnamed deal',\n      owner: ownerMap[props.hubspot_owner_id] || 'Unassigned',\n      amount: money(props.amount),\n      days_idle: daysSince,\n      stage: stageMetadata[props.dealstage]?.label || props.dealstage,\n      url: deal.url || ''\n    });\n  }\n});\n\n// ---------- CHECK 2 — OVERDUE CLOSE DATES ----------\n\nconst overdueDeals = [];\n\ndeals.forEach(deal => {\n  const props = deal.properties;\n  if (closedStages.has(props.dealstage)) return;\n  if (!props.closedate) return;\n\n  const closeDate = safeDate(props.closedate);\n  if (!closeDate) return;\n\n  const daysOverdue = daysBetween(now, closeDate);\n\n  if (daysOverdue > 0) {\n    overdueDeals.push({\n      name: props.dealname || 'Unnamed deal',\n      owner: ownerMap[props.hubspot_owner_id] || 'Unassigned',\n      amount: money(props.amount),\n      close_date: props.closedate.split('T')[0],\n      days_overdue: daysOverdue,\n      stage: stageMetadata[props.dealstage]?.label || props.dealstage,\n      url: deal.url || ''\n    });\n  }\n});\n\n// ---------- CHECK 3 — LEADS WITH NO LOGGED FOLLOW-UP ----------\n\nconst uncontactedLeads = [];\n\ncontacts.forEach(contact => {\n  const props = contact.properties;\n\n  const createdDate = safeDate(props.createdate);\n  const daysSinceCreated = daysBetween(now, createdDate);\n\n  if (daysSinceCreated >= UNCONTACTED_DAYS && !props.notes_last_activity) {\n    uncontactedLeads.push({\n      name: `${props.firstname || ''} ${props.lastname || ''}`.trim() || 'Unnamed contact',\n      owner: ownerMap[props.hubspot_owner_id] || 'Unassigned',\n      days_since_created: daysSinceCreated,\n      email: props.email || 'No email',\n      url: contact.url || ''\n    });\n  }\n});\n\n// ---------- CHECK 4 — MISSING CRITICAL DATA ----------\n\nconst missingData = {\n  contacts_no_reachable_info: [],\n  deals_no_close_date: [],\n  deals_no_owner: []\n};\n\ncontacts.forEach(contact => {\n  const props = contact.properties;\n\n  if (!props.email && !props.phone && !props.mobilephone) {\n    missingData.contacts_no_reachable_info.push({\n      name: `${props.firstname || ''} ${props.lastname || ''}`.trim() || 'Unnamed contact',\n      owner: ownerMap[props.hubspot_owner_id] || 'Unassigned',\n      url: contact.url || ''\n    });\n  }\n});\n\ndeals.forEach(deal => {\n  const props = deal.properties;\n  if (closedStages.has(props.dealstage)) return;\n\n  if (!props.closedate) {\n    missingData.deals_no_close_date.push({\n      name: props.dealname || 'Unnamed deal',\n      owner: ownerMap[props.hubspot_owner_id] || 'Unassigned',\n      amount: money(props.amount),\n      url: deal.url || ''\n    });\n  }\n\n  if (!props.hubspot_owner_id || props.hubspot_owner_id === '') {\n    missingData.deals_no_owner.push({\n      name: props.dealname || 'Unnamed deal',\n      amount: money(props.amount),\n      url: deal.url || ''\n    });\n  }\n});\n\n// ---------- CHECK 5 — STUCK DEALS ----------\n\nconst stuckDeals = [];\n\ndeals.forEach(deal => {\n  const props = deal.properties;\n  if (closedStages.has(props.dealstage)) return;\n\n  const lastStageMovement =\n    safeDate(props.hs_lastmodifieddate) ||\n    safeDate(props.createdate);\n\n  const daysInStage = daysBetween(now, lastStageMovement);\n\n  if (daysInStage >= STUCK_DAYS) {\n    stuckDeals.push({\n      name: props.dealname || 'Unnamed deal',\n      owner: ownerMap[props.hubspot_owner_id] || 'Unassigned',\n      amount: money(props.amount),\n      stage: stageMetadata[props.dealstage]?.label || props.dealstage,\n      days_in_stage: daysInStage,\n      url: deal.url || ''\n    });\n  }\n});\n\n// ---------- FORECAST ----------\n\nconst openDeals = deals.filter(d => !closedStages.has(d.properties.dealstage));\n\nconst totalPipelineValue = openDeals.reduce(\n  (sum, d) => sum + money(d.properties.amount),\n  0\n);\n\nconst weightedPipeline = openDeals.reduce((sum, d) => {\n  const probability = stageMetadata[d.properties.dealstage]?.probability || 0.2;\n  return sum + money(d.properties.amount) * probability;\n}, 0);\n\nconst forecastGap = MONTHLY_TARGET - weightedPipeline;\n\n// ---------- WEEK OVER WEEK ----------\n\nlet pipelineChangePct = 0;\n\nif (lastWeekRows.length > 0) {\n  const lastRow = lastWeekRows[lastWeekRows.length - 1].json;\n  const lastWeekPipeline = parseFloat(lastRow.total_pipeline_value) || 0;\n\n  if (lastWeekPipeline > 0) {\n    pipelineChangePct = Math.round(\n      ((totalPipelineValue - lastWeekPipeline) / lastWeekPipeline) * 100\n    );\n  }\n}\n\n// ---------- AT RISK VALUE ----------\n\nconst atRiskValue = [...new Map(\n  [...idleDeals, ...overdueDeals].map(d => [d.name, d])\n).values()].reduce((sum, d) => sum + (d.amount || 0), 0);\n\nconst atRiskPercentage = totalPipelineValue > 0\n  ? Math.round((atRiskValue / totalPipelineValue) * 100)\n  : 0;\n\n// ---------- DATA QUALITY SCORE ----------\n\nconst totalRecordsChecked = openDeals.length + contacts.length;\n\nconst dataQualityIssues =\n  missingData.contacts_no_reachable_info.length +\n  missingData.deals_no_close_date.length +\n  missingData.deals_no_owner.length;\n\nconst dataQualityScore = totalRecordsChecked > 0\n  ? Math.max(0, Math.round(100 - ((dataQualityIssues / totalRecordsChecked) * 100)))\n  : 100;\n\n// ---------- FORECAST CONFIDENCE ----------\n\nlet forecastConfidence = 'High';\n\nif (\n  forecastGap > 0 ||\n  (totalPipelineValue > 0 && (atRiskValue / totalPipelineValue) > 0.4)\n) {\n  forecastConfidence = 'Low';\n} else if (\n  totalPipelineValue > 0 &&\n  (atRiskValue / totalPipelineValue) > 0.2\n) {\n  forecastConfidence = 'Medium';\n}\n\n// ---------- TOP RISK DEALS ----------\n\nconst topRiskDeals = [...new Map(\n  [...overdueDeals, ...idleDeals, ...stuckDeals].map(d => [d.name, d])\n).values()]\n  .sort((a, b) => (b.amount || 0) - (a.amount || 0))\n  .slice(0, 5);\n\n// ---------- REP PERFORMANCE ----------\n\nconst repStats = {};\n\nopenDeals.forEach(deal => {\n  const owner = ownerMap[deal.properties.hubspot_owner_id] || 'Unassigned';\n\n  if (!repStats[owner]) {\n    repStats[owner] = {\n      idle: 0,\n      overdue: 0,\n      uncontacted: 0,\n      total_deals: 0\n    };\n  }\n\n  repStats[owner].total_deals++;\n});\n\nidleDeals.forEach(d => {\n  if (!repStats[d.owner]) {\n    repStats[d.owner] = {\n      idle: 0,\n      overdue: 0,\n      uncontacted: 0,\n      total_deals: 0\n    };\n  }\n\n  repStats[d.owner].idle++;\n});\n\noverdueDeals.forEach(d => {\n  if (!repStats[d.owner]) {\n    repStats[d.owner] = {\n      idle: 0,\n      overdue: 0,\n      uncontacted: 0,\n      total_deals: 0\n    };\n  }\n\n  repStats[d.owner].overdue++;\n});\n\nuncontactedLeads.forEach(d => {\n  if (!repStats[d.owner]) {\n    repStats[d.owner] = {\n      idle: 0,\n      overdue: 0,\n      uncontacted: 0,\n      total_deals: 0\n    };\n  }\n\n  repStats[d.owner].uncontacted++;\n});\n\nconst repScores = Object.entries(repStats)\n  .map(([name, stats]) => {\n    const issues = stats.idle + stats.overdue + stats.uncontacted;\n    const score = Math.max(0, 10 - (issues * 2));\n\n    return {\n      name,\n      score,\n      follow_up_risk: score <= 4 ? 'High' : score <= 7 ? 'Medium' : 'Low',\n      ...stats\n    };\n  })\n  .sort((a, b) => a.score - b.score);\n\n// ---------- WIN / LOSS ----------\n\nconst closedWon = closedDeals.filter(d => d.properties.dealstage === 'closedwon');\nconst closedLost = closedDeals.filter(d => d.properties.dealstage === 'closedlost');\n\nconst wonValue = closedWon.reduce(\n  (sum, d) => sum + money(d.properties.amount),\n  0\n);\n\nconst lostValue = closedLost.reduce(\n  (sum, d) => sum + money(d.properties.amount),\n  0\n);\n\nconst closedDealCount = closedWon.length + closedLost.length;\n\nconst winRate = closedDealCount > 0\n  ? Math.round((closedWon.length / closedDealCount) * 100)\n  : 0;\n\n// ---------- WEEK LABEL ----------\n\nconst weekNumber = Math.ceil(\n  (Math.floor((now - new Date(now.getFullYear(), 0, 1)) / 86400000) + 1) / 7\n);\n\nconst weekLabel = `${now.getFullYear()}-W${String(weekNumber).padStart(2, '0')}`;\n\n// ---------- FINAL OUTPUT ----------\n\nreturn [\n  {\n    json: {\n      week: weekLabel,\n      run_date: now.toISOString().split('T')[0],\n\n      config: {\n        mode: DEMO_MODE ? 'demo_test' : 'production',\n        crm_mode: CRM_MODE,\n        idle_days: IDLE_DAYS,\n        stuck_days: STUCK_DAYS,\n        uncontacted_days: UNCONTACTED_DAYS,\n        production_recommendation: {\n          idle_days: 14,\n          stuck_days: 30,\n          uncontacted_days: 7\n  }\n},\n\n      summary: {\n        total_open_deals: openDeals.length,\n        total_pipeline_value: totalPipelineValue,\n        weighted_pipeline: Math.round(weightedPipeline),\n        monthly_target: MONTHLY_TARGET,\n        forecast_gap: Math.round(forecastGap),\n        at_risk_value: atRiskValue,\n        at_risk_percentage: atRiskPercentage,\n        pipeline_change_pct: pipelineChangePct,\n        data_quality_score: dataQualityScore\n      },\n\n      critical: {\n        idle_deals: {\n          count: idleDeals.length,\n          total_value: idleDeals.reduce((sum, d) => sum + d.amount, 0),\n          items: idleDeals\n        },\n        overdue_deals: {\n          count: overdueDeals.length,\n          total_value: overdueDeals.reduce((sum, d) => sum + d.amount, 0),\n          items: overdueDeals\n        },\n        uncontacted_leads: {\n          count: uncontactedLeads.length,\n          items: uncontactedLeads\n        }\n      },\n\n      warnings: {\n        stuck_deals: {\n          count: stuckDeals.length,\n          total_value: stuckDeals.reduce((sum, d) => sum + d.amount, 0),\n          items: stuckDeals\n        },\n        missing_data: {\n          contacts_no_reachable_info: missingData.contacts_no_reachable_info.length,\n          deals_no_close_date: missingData.deals_no_close_date.length,\n          deals_no_owner: missingData.deals_no_owner.length,\n          items: missingData\n        }\n      },\n\n      top_risk_deals: topRiskDeals,\n\n      rep_performance: repScores,\n\n      win_loss: {\n        closed_won_count: closedWon.length,\n        closed_lost_count: closedLost.length,\n        won_value: wonValue,\n        lost_value: lostValue,\n        win_rate: winRate,\n        closed_deal_count: closedDealCount\n      },\n\n      forecast: {\n        weighted_pipeline: Math.round(weightedPipeline),\n        monthly_target: MONTHLY_TARGET,\n        gap: Math.round(forecastGap),\n        on_track: forecastGap <= 0,\n        confidence: forecastConfidence\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        128
+      ],
+      "id": "39f63f63-88d2-4389-95c2-e108ec54e972",
+      "name": "Run Health Checks"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "YOUR_SLACK_WEBHOOK_URL",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ \n\"📊 *CRM Health Report — \" + $json.week + \"* — \" + $json.run_date + \"\\n\" +\n($json.config?.mode === \"demo_test\"\n  ? \"_Demo mode: thresholds set to \" + $json.config.idle_days + \" days for idle/stuck/no-follow-up checks. Production recommendation: idle 14d, stuck 30d, uncontacted 7d._\\n\"\n  : \"\") +\n\"\\n\" +\n\n\"*🔴 CRITICAL — Act today*\\n\" +\n\"→ \" + $json.critical.idle_deals.count + \" idle deals ($\" + $json.critical.idle_deals.total_value.toLocaleString() + \" at risk)\\n\" +\n\"→ \" + $json.critical.overdue_deals.count + \" deals past close date ($\" + $json.critical.overdue_deals.total_value.toLocaleString() + \")\\n\" +\n\"→ \" + $json.critical.uncontacted_leads.count + \" new leads with no logged follow-up\\n\\n\" +\n\n\"*🟡 WARNINGS*\\n\" +\n\"→ \" + $json.warnings.stuck_deals.count + \" deals stuck 30+ days\\n\" +\n\"→ \" + $json.warnings.missing_data.contacts_no_reachable_info + \" contacts missing contact info\\n\" +\n\"→ \" + $json.warnings.missing_data.deals_no_owner + \" deals with no owner\\n\" +\n\"→ CRM data quality score: \" + $json.summary.data_quality_score + \"/100\\n\\n\" +\n\n\"*🎯 FORECAST*\\n\" +\n\"→ Monthly target: $\" + $json.forecast.monthly_target.toLocaleString() + \"\\n\" +\n\"→ Weighted pipeline: $\" + $json.forecast.weighted_pipeline.toLocaleString() + \"\\n\" +\n\"→ Gap: $\" + $json.forecast.gap.toLocaleString() +\n\" (\" + Math.round(($json.forecast.gap / $json.forecast.monthly_target) * 100) + \"%) \" +\n($json.forecast.on_track ? \"✅ On track\" : \"❌ Behind target\") + \"\\n\" +\n\"→ Forecast confidence: \" + $json.forecast.confidence + \"\\n\\n\" +\n\n\"*📉 PIPELINE*\\n\" +\n\"→ Total: $\" + $json.summary.total_pipeline_value.toLocaleString() + \" \" + \n($json.summary.pipeline_change_pct >= 0 ? \"▲\" : \"▼\") + \" \" + \nMath.abs($json.summary.pipeline_change_pct) + \"% vs last week\\n\" +\n\"→ At risk: $\" + $json.summary.at_risk_value.toLocaleString() + \n\" (\" + $json.summary.at_risk_percentage + \"%)\\n\\n\" +\n\n\"*🔥 TOP RISK DEALS*\\n\" +\n($json.top_risk_deals && $json.top_risk_deals.length > 0\n  ? $json.top_risk_deals.map((d, i) =>\n      \"→ \" + (i + 1) + \". \" + d.name +\n      \" — $\" + (d.amount || 0).toLocaleString() +\n      \" — Owner: \" + d.owner +\n      (d.days_overdue !== undefined ? \" — Overdue: \" + d.days_overdue + \"d\" : \"\") +\n      (d.days_idle !== undefined ? \" — Idle: \" + d.days_idle + \"d\" : \"\") +\n      (d.days_in_stage !== undefined ? \" — Stage age: \" + d.days_in_stage + \"d\" : \"\")\n    ).join(\"\\n\")\n  : \"→ No high-risk deals detected\") +\n\"\\n\\n\" +\n\n\"*🏆 WIN/LOSS THIS MONTH*\\n\" +\n\"→ Won: \" + $json.win_loss.closed_won_count + \" deals ($\" + $json.win_loss.won_value.toLocaleString() + \")\\n\" +\n\"→ Lost: \" + $json.win_loss.closed_lost_count + \" deals ($\" + $json.win_loss.lost_value.toLocaleString() + \")\\n\" +\n\"→ Win rate: \" + $json.win_loss.win_rate + \"% based on \" + \n($json.win_loss.closed_deal_count ?? ($json.win_loss.closed_won_count + $json.win_loss.closed_lost_count)) + \n\" closed deals\\n\\n\" +\n\n\"*👤 REP PERFORMANCE*\\n\" +\n($json.rep_performance && $json.rep_performance.length > 0\n  ? $json.rep_performance.map(r =>\n      \"→ \" + r.name +\n      \" — Follow-up risk: \" + (r.follow_up_risk || (r.score <= 4 ? \"High\" : r.score <= 7 ? \"Medium\" : \"Low\")) +\n      \" — Idle: \" + r.idle +\n      \" Overdue: \" + r.overdue +\n      \" Uncontacted: \" + r.uncontacted\n    ).join(\"\\n\")\n  : \"→ No rep data available\") +\n\n\"\\n\\n*🧭 PRIORITY ACTIONS*\\n\" +\n($json.critical.overdue_deals.count > 0\n  ? \"→ Fix overdue close dates today to protect forecast accuracy\\n\" : \"\") +\n($json.critical.idle_deals.count > 0\n  ? \"→ Review idle deals and assign next steps\\n\" : \"\") +\n($json.critical.uncontacted_leads.count > 0\n  ? \"→ Contact unworked leads within 24 hours\\n\" : \"\") +\n($json.warnings.missing_data.deals_no_owner > 0\n  ? \"→ Assign owners to unowned deals immediately\\n\" : \"\") +\n($json.warnings.missing_data.deals_no_close_date > 0\n  ? \"→ Add missing close dates to improve forecast reliability\\n\" : \"\") +\n($json.warnings.missing_data.contacts_no_reachable_info > 0\n  ? \"→ Complete missing contact info before next campaign\\n\" : \"\") +\n($json.forecast.on_track ? \"\" : \"→ Review pipeline gap against monthly target\\n\")\n}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1152,
+        368
+      ],
+      "id": "0da533c7-c18d-4bb1-b46f-bbcc8947b7e8",
+      "name": "Send Slack Report"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"model\": \"llama-3.1-8b-instant\",\n  \"temperature\": 0.2,\n  \"max_tokens\": 400,\n  \"messages\": [\n    {\n  \"role\": \"system\",\n  \"content\": \"You are a senior Revenue Operations analyst. You interpret weekly CRM health metrics for a sales manager.\\n\\nRules:\\n- Do not blame individual reps by name.\\n- Do not mention rep scores directly.\\n- Focus on process risks, pipeline risk, and CRM hygiene.\\n- Prioritize open-pipeline issues over already-lost deals.\\n- If thresholds are in demo mode, mention that results are inflated for testing.\\n- Say \\\"no logged activity in CRM\\\" instead of \\\"no activity\\\".\\n- Be concise: maximum 4 sentences.\\n- Output plain text only.\"\n},\n    {\n      \"role\": \"user\",\n      \"content\": \"Week: \" + $('Run Health Checks').first().json.week + \n      \". Open deals: \" + $('Run Health Checks').first().json.summary.total_open_deals + \n      \". Pipeline: $\" + $('Run Health Checks').first().json.summary.total_pipeline_value + \n      \". Weighted pipeline: $\" + $('Run Health Checks').first().json.summary.weighted_pipeline + \n      \". Monthly target: $\" + $('Run Health Checks').first().json.summary.monthly_target + \n      \". Forecast gap: $\" + $('Run Health Checks').first().json.summary.forecast_gap + \n      \". On track: \" + $('Run Health Checks').first().json.forecast.on_track + \n      \". Idle deals: \" + $('Run Health Checks').first().json.critical.idle_deals.count + \n      \" worth $\" + $('Run Health Checks').first().json.critical.idle_deals.total_value + \n      \". Overdue deals: \" + $('Run Health Checks').first().json.critical.overdue_deals.count + \n      \". Uncontacted leads: \" + $('Run Health Checks').first().json.critical.uncontacted_leads.count + \n      \". Stuck deals: \" + $('Run Health Checks').first().json.warnings.stuck_deals.count + \n      \". Missing contact info: \" + $('Run Health Checks').first().json.warnings.missing_data.contacts_no_reachable_info + \n      \". Deals no owner: \" + $('Run Health Checks').first().json.warnings.missing_data.deals_no_owner + \n      \". Won this month: \" + $('Run Health Checks').first().json.win_loss.closed_won_count + \n      \" ($\" + $('Run Health Checks').first().json.win_loss.won_value + \")\" +\n      \". Lost this month: \" + $('Run Health Checks').first().json.win_loss.closed_lost_count + \n      \" ($\" + $('Run Health Checks').first().json.win_loss.lost_value + \")\" +\n      \". Win rate: \" + $('Run Health Checks').first().json.win_loss.win_rate + \"%\" +\n      \". Rep scores: \" + $('Run Health Checks').first().json.rep_performance.map(r => r.name + \" \" + r.score + \"/10\").join(\", \") +\n      \". Write a 4 sentence executive summary. Start with the biggest business risk. Explain the most actionable CRM issue from the open pipeline. Do not blame individual reps by name and do not mention rep scores. Recommend the first manager action this week. If demo thresholds are set to 0, say the alert volume is intentionally inflated for testing.\"\n    }\n  ]\n} }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1152,
+        176
+      ],
+      "id": "df1dd26c-9b6d-419f-b738-3ff81bc80db4",
+      "name": "Generate AI Summary",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "YOUR_GROQ_CREDENTIAL_ID",
+          "name": "YOUR_GROQ_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "YOUR_EMAIL@example.com",
+        "subject": "={{ \"CRM Health Report — \" + $('Run Health Checks').first().json.week + \" — \" + $('Run Health Checks').first().json.run_date }}",
+        "message": "={{ \"<h2 style='color:#333'>📊 CRM Health Report — \" + $('Run Health Checks').first().json.week + \"</h2>\" +\n\"<p style='color:gray'>\" + $('Run Health Checks').first().json.run_date + \"</p>\" +\n\n\"<h3 style='color:#c0392b'>🔴 Critical — Act Today</h3><ul>\" +\n\"<li><b>Idle deals:</b> \" + $('Run Health Checks').first().json.critical.idle_deals.count + \" ($\" + $('Run Health Checks').first().json.critical.idle_deals.total_value.toLocaleString() + \" at risk)</li>\" +\n\"<li><b>Overdue deals:</b> \" + $('Run Health Checks').first().json.critical.overdue_deals.count + \" ($\" + $('Run Health Checks').first().json.critical.overdue_deals.total_value.toLocaleString() + \")</li>\" +\n\"<li><b>Leads with no logged follow-up:</b> \" + $('Run Health Checks').first().json.critical.uncontacted_leads.count + \"</li></ul>\" +\n\n\"<h3 style='color:#e67e22'>🟡 Warnings</h3><ul>\" +\n\"<li><b>Stuck deals:</b> \" + $('Run Health Checks').first().json.warnings.stuck_deals.count + \"</li>\" +\n\"<li><b>Missing contact info:</b> \" + $('Run Health Checks').first().json.warnings.missing_data.contacts_no_reachable_info + \"</li>\" +\n\"<li><b>Deals no owner:</b> \" + $('Run Health Checks').first().json.warnings.missing_data.deals_no_owner + \"</li></ul>\" +\n\n\"<h3 style='color:#2980b9'>🎯 Forecast</h3><ul>\" +\n\"<li><b>Monthly target:</b> $\" + $('Run Health Checks').first().json.forecast.monthly_target.toLocaleString() + \"</li>\" +\n\"<li><b>Weighted pipeline:</b> $\" + $('Run Health Checks').first().json.forecast.weighted_pipeline.toLocaleString() + \"</li>\" +\n\"<li><b>Gap:</b> $\" + $('Run Health Checks').first().json.forecast.gap.toLocaleString() + \" \" + ($('Run Health Checks').first().json.forecast.on_track ? \"✅ On track\" : \"❌ Behind target\") + \"</li></ul>\" +\n\n\"<h3 style='color:#27ae60'>🏆 Win/Loss This Month</h3><ul>\" +\n\"<li><b>Won:</b> \" + $('Run Health Checks').first().json.win_loss.closed_won_count + \" deals ($\" + $('Run Health Checks').first().json.win_loss.won_value.toLocaleString() + \")</li>\" +\n\"<li><b>Lost:</b> \" + $('Run Health Checks').first().json.win_loss.closed_lost_count + \" deals ($\" + $('Run Health Checks').first().json.win_loss.lost_value.toLocaleString() + \")</li>\" +\n\"<li><b>Win rate:</b> \" + $('Run Health Checks').first().json.win_loss.win_rate + \"%</li></ul>\" +\n\n\"<h3>👤 Rep Performance</h3><ul>\" +\n$('Run Health Checks').first().json.rep_performance.map(r => \"<li><b>\" + r.name + \"</b> — Follow-up risk: \" + (r.score <= 4 ? \"High\" : r.score <= 7 ? \"Medium\" : \"Low\") + \" — Idle: \" + r.idle + \" | Overdue: \" + r.overdue + \" | Uncontacted: \" + r.uncontacted + \"</li>\").join(\"\") +\n\"</ul>\" +\n\n\"<h3>🤖 AI Summary</h3>\" +\n\"<p style='background:#f8f9fa;padding:15px;border-left:4px solid #3498db'>\" + $json.choices[0].message.content + \"</p>\" +\n\n\"<hr><p style='color:gray;font-size:12px'>Generated automatically by CRM Health Monitor — n8n | \" + $('Run Health Checks').first().json.run_date + \"</p>\" }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1392,
+        176
+      ],
+      "id": "6a640eb9-8fa7-4290-a1cb-8e6a8e9e4e20",
+      "name": "Send AI Summary by Email",
+      "webhookId": "YOUR_N8N_WEBHOOK_ID",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/deals/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"filterGroups\": [\n    {\n      \"filters\": [\n        {\n          \"propertyName\": \"closedate\",\n          \"operator\": \"GTE\",\n          \"value\": \"2026-01-01\"\n        },\n        {\n          \"propertyName\": \"dealstage\",\n          \"operator\": \"IN\",\n          \"values\": [\"closedwon\", \"closedlost\"]\n        }\n      ]\n    }\n  ],\n  \"properties\": [\n    \"dealname\",\n    \"amount\",\n    \"closedate\",\n    \"dealstage\",\n    \"hubspot_owner_id\"\n  ],\n  \"limit\": 100\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -224,
+        544
+      ],
+      "id": "ba44db2b-2deb-427c-ae0d-e102d59f8831",
+      "name": "Fetch Closed Deals",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "YOUR_HUBSPOT_CREDENTIAL_ID",
+          "name": "YOUR_HUBSPOT_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "CRM Health Monitor",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "audit_log",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -224,
+        720
+      ],
+      "id": "81d0efa7-9aca-4ec8-8878-51058c12f182",
+      "name": "Read Last Week Log",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "numberInputs": 6
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        320,
+        64
+      ],
+      "id": "bffee341-59c9-4642-80a6-490fcd27503f",
+      "name": "Combine All"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "CRM Health Monitor",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "audit_log",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "week": "={{ $json.week }}",
+            "run_date": "={{ $json.run_date }}",
+            "total_open_deals": "={{ $json.summary.total_open_deals }}",
+            "total_pipeline_value": "={{ $json.summary.total_pipeline_value }}",
+            "at_risk_value": "={{ $json.summary.at_risk_value }}",
+            "at_risk_percentage": "={{ $json.summary.at_risk_percentage }}",
+            "idle_deals_count": "={{ $json.critical.idle_deals.count }}",
+            "overdue_deals_count": "={{ $json.critical.overdue_deals.count }}",
+            "uncontacted_leads_count": "={{ $json.critical.uncontacted_leads.count }}",
+            "stuck_deals_count": "={{ $json.warnings.stuck_deals.count }}",
+            "missing_contact_info": "={{ $json.warnings.missing_data.contacts_no_reachable_info }}",
+            "deals_no_owner": "={{ $json.warnings.missing_data.deals_no_owner }}",
+            "deals_no_close_date": "={{ $json.warnings.missing_data.deals_no_close_date }}",
+            "weighted_pipeline": "={{ $json.summary.weighted_pipeline }}",
+            "forecast_gap": "={{ $json.summary.forecast_gap }}",
+            "deals_closed_lost": "={{ $json.win_loss.closed_lost_count }}",
+            "deals_closed_won": "={{ $json.win_loss.closed_won_count }}",
+            "pipeline_change_pct": "={{ $json.summary.pipeline_change_pct }}"
+          },
+          "matchingColumns": [
+            "week"
+          ],
+          "schema": [
+            {
+              "id": "week",
+              "displayName": "week",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "run_date",
+              "displayName": "run_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "total_open_deals",
+              "displayName": "total_open_deals",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "total_pipeline_value",
+              "displayName": "total_pipeline_value",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "at_risk_value",
+              "displayName": "at_risk_value",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "at_risk_percentage",
+              "displayName": "at_risk_percentage",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "idle_deals_count",
+              "displayName": "idle_deals_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "overdue_deals_count",
+              "displayName": "overdue_deals_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "uncontacted_leads_count",
+              "displayName": "uncontacted_leads_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "stuck_deals_count",
+              "displayName": "stuck_deals_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "missing_contact_info",
+              "displayName": "missing_contact_info",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "deals_no_owner",
+              "displayName": "deals_no_owner",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "deals_no_close_date",
+              "displayName": "deals_no_close_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "weighted_pipeline",
+              "displayName": "weighted_pipeline",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "forecast_gap",
+              "displayName": "forecast_gap",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "deals_closed_won",
+              "displayName": "deals_closed_won",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "deals_closed_lost",
+              "displayName": "deals_closed_lost",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "pipeline_change_pct",
+              "displayName": "pipeline_change_pct",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1152,
+        -16
+      ],
+      "id": "bcfbcb11-a6b8-478d-96ff-556aac40d347",
+      "name": "Log Weekly Audit",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n\nconst rows = [];\n\nfunction addRow({\n  record_type,\n  record_name,\n  owner = 'Unassigned',\n  amount = 0,\n  issue_type,\n  severity,\n  days = '',\n  recommended_action,\n  url = ''\n}) {\n  const cleanRecordName = String(record_name || 'unknown_record')\n    .trim()\n    .toLowerCase()\n    .replace(/\\s+/g, '_');\n\n  const cleanIssueType = String(issue_type || 'unknown_issue')\n    .trim()\n    .toLowerCase()\n    .replace(/\\s+/g, '_');\n\n  const issue_id = `${data.week}|${record_type}|${cleanRecordName}|${cleanIssueType}`;\n\n  rows.push({\n    json: {\n      issue_id,\n      week: data.week,\n      run_date: data.run_date,\n      record_type,\n      record_name,\n      owner,\n      amount,\n      issue_type,\n      severity,\n      days,\n      recommended_action,\n      url\n    }\n  });\n}\n\n// Idle deals\nfor (const deal of data.critical.idle_deals.items || []) {\n  addRow({\n    record_type: 'deal',\n    record_name: deal.name,\n    owner: deal.owner,\n    amount: deal.amount,\n    issue_type: 'idle_deal',\n    severity: 'critical',\n    days: deal.days_idle,\n    recommended_action: 'Review deal and log next follow-up action in CRM',\n    url: deal.url || ''\n  });\n}\n\n// Overdue deals\nfor (const deal of data.critical.overdue_deals.items || []) {\n  addRow({\n    record_type: 'deal',\n    record_name: deal.name,\n    owner: deal.owner,\n    amount: deal.amount,\n    issue_type: 'overdue_close_date',\n    severity: 'critical',\n    days: deal.days_overdue,\n    recommended_action: 'Update close date or move deal to closed won/lost',\n    url: deal.url || ''\n  });\n}\n\n// Leads with no logged follow-up\nfor (const lead of data.critical.uncontacted_leads.items || []) {\n  addRow({\n    record_type: 'contact',\n    record_name: lead.name || 'Unnamed contact',\n    owner: lead.owner,\n    amount: 0,\n    issue_type: 'no_logged_follow_up',\n    severity: 'critical',\n    days: lead.days_since_created,\n    recommended_action: 'Assign owner and log first follow-up activity',\n    url: lead.url || ''\n  });\n}\n\n// Stuck deals\nfor (const deal of data.warnings.stuck_deals.items || []) {\n  addRow({\n    record_type: 'deal',\n    record_name: deal.name,\n    owner: deal.owner,\n    amount: deal.amount,\n    issue_type: 'stuck_deal',\n    severity: 'warning',\n    days: deal.days_in_stage,\n    recommended_action: 'Review stage status and define next step',\n    url: deal.url || ''\n  });\n}\n\n// Contacts missing contact info\nfor (const contact of data.warnings.missing_data.items.contacts_no_reachable_info || []) {\n  addRow({\n    record_type: 'contact',\n    record_name: contact.name || 'Unnamed contact',\n    owner: contact.owner,\n    amount: 0,\n    issue_type: 'missing_contact_info',\n    severity: 'warning',\n    days: '',\n    recommended_action: 'Add phone or email before next campaign',\n    url: contact.url || ''\n  });\n}\n\n// Deals missing close date\nfor (const deal of data.warnings.missing_data.items.deals_no_close_date || []) {\n  addRow({\n    record_type: 'deal',\n    record_name: deal.name,\n    owner: deal.owner,\n    amount: deal.amount,\n    issue_type: 'missing_close_date',\n    severity: 'warning',\n    days: '',\n    recommended_action: 'Add expected close date for forecasting',\n    url: deal.url || ''\n  });\n}\n\n// Deals missing owner\nfor (const deal of data.warnings.missing_data.items.deals_no_owner || []) {\n  addRow({\n    record_type: 'deal',\n    record_name: deal.name,\n    owner: 'Unassigned',\n    amount: deal.amount,\n    issue_type: 'missing_owner',\n    severity: 'critical',\n    days: '',\n    recommended_action: 'Assign a deal owner immediately',\n    url: deal.url || ''\n  });\n}\n\n// If no issues, log a clean run\nif (rows.length === 0) {\n  return [{\n    json: {\n      week: data.week,\n      run_date: data.run_date,\n      record_type: 'system',\n      record_name: 'No issues detected',\n      owner: '',\n      amount: 0,\n      issue_type: 'clean_run',\n      severity: 'info',\n      days: '',\n      recommended_action: 'No action required',\n      url: ''\n    }\n  }];\n}\n\nreturn rows;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1136,
+        -176
+      ],
+      "id": "99516ab6-996d-45a0-951b-69004f518bab",
+      "name": "Build Risk Detail Rows"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "CRM Health Monitor",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1221767612,
+          "mode": "list",
+          "cachedResultName": "risk_details",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=1221767612"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "week": "={{ $json.week }}",
+            "run_date": "={{ $json.run_date }}",
+            "record_type": "={{ $json.record_type }}",
+            "record_name": "={{ $json.record_name }}",
+            "owner": "={{ $json.owner }}",
+            "amount": "={{ $json.amount }}",
+            "issue_type": "={{ $json.issue_type }}",
+            "severity": "={{ $json.severity }}",
+            "days": "={{ $json.days }}",
+            "recommended_action": "={{ $json.recommended_action }}",
+            "url": "={{ $json.url }}",
+            "issue_id": "={{ $json.issue_id }}"
+          },
+          "matchingColumns": [
+            "issue_id"
+          ],
+          "schema": [
+            {
+              "id": "issue_id",
+              "displayName": "issue_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "week",
+              "displayName": "week",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "run_date",
+              "displayName": "run_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "record_type",
+              "displayName": "record_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "record_name",
+              "displayName": "record_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "owner",
+              "displayName": "owner",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "amount",
+              "displayName": "amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "issue_type",
+              "displayName": "issue_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "severity",
+              "displayName": "severity",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "days",
+              "displayName": "days",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "recommended_action",
+              "displayName": "recommended_action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "url",
+              "displayName": "url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1360,
+        -176
+      ],
+      "id": "1914217c-bcf7-4b21-8c96-5a43620f8e65",
+      "name": "Log Risk Details",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "8f96c8d5-0add-458b-910e-0e883ace7963",
+              "name": "crm_mode",
+              "value": "demo",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        496,
+        128
+      ],
+      "id": "c75fc5b4-cde1-46f4-b013-f6e11173346b",
+      "name": "Set Run Mode"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "5cb29602-44c1-452f-9afc-29f39fb9485e",
+              "leftValue": "={{ $json.crm_mode }}",
+              "rightValue": "demo",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        656,
+        128
+      ],
+      "id": "5fa98ca4-f68c-4337-9888-f8e9ad6f1429",
+      "name": "Mode is Demo?"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Recent Contacts",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Owners",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Pipeline Stages",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Open Deals",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Closed Deals",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Last Week Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Pipeline Stages": {
+      "main": [
+        [
+          {
+            "node": "Combine All",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Fetch Recent Contacts": {
+      "main": [
+        [
+          {
+            "node": "Combine All",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Open Deals": {
+      "main": [
+        [
+          {
+            "node": "Combine All",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Fetch Owners": {
+      "main": [
+        [
+          {
+            "node": "Combine All",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Run Health Checks": {
+      "main": [
+        [
+          {
+            "node": "Send Slack Report",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Weekly Audit",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Generate AI Summary",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Risk Detail Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Slack Report": {
+      "main": [
+        []
+      ]
+    },
+    "Generate AI Summary": {
+      "main": [
+        [
+          {
+            "node": "Send AI Summary by Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Closed Deals": {
+      "main": [
+        [
+          {
+            "node": "Combine All",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "Read Last Week Log": {
+      "main": [
+        [
+          {
+            "node": "Combine All",
+            "type": "main",
+            "index": 5
+          }
+        ]
+      ]
+    },
+    "Combine All": {
+      "main": [
+        [
+          {
+            "node": "Set Run Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Risk Detail Rows": {
+      "main": [
+        [
+          {
+            "node": "Log Risk Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Run Mode": {
+      "main": [
+        [
+          {
+            "node": "Mode is Demo?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mode is Demo?": {
+      "main": [
+        [
+          {
+            "node": "Run Health Checks",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Run Health Checks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "SANITIZED_VERSION_ID",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "SANITIZED_INSTANCE_ID"
+  },
+  "id": "SANITIZED_WORKFLOW_ID",
+  "tags": []
+}
