@@ -251,7 +251,7 @@ YOUR_EMAIL@example.com
 - Self-hosted n8n instance (v2.0+)
 - HubSpot free account
 - Google account with Sheets + Gmail access
-- Groq account — free tier
+- Groq account
 - Slack workspace with incoming webhook
 
 ### Step 1 — Create HubSpot Private App
@@ -259,7 +259,7 @@ YOUR_EMAIL@example.com
 1. Go to `app.hubspot.com` → Settings → Integrations → Private Apps
 2. Create app named `n8n CRM Monitor`
 3. Add scopes: `crm.objects.contacts.read`, `crm.objects.deals.read`, `crm.objects.owners.read`, `crm.schemas.deals.read`, `crm.schemas.contacts.read`, `sales-email-read`
-4. Copy the access token — starts with `pat-eu1-` for EU accounts
+4. Copy the access token
 
 ### Step 2 — Import the workflow
 
@@ -294,18 +294,6 @@ const MONTHLY_TARGET = 150000; // Change to your target
 Set Schedule Trigger to Monday 7AM in your timezone and activate.
 
 ---
-
-## ⚠️ Known Limitations
-
-- Demo mode intentionally inflates issue counts because thresholds are set to 0
-- `notes_last_activity` only reflects activity logged in HubSpot — WhatsApp, phone calls, or emails outside HubSpot will not appear. The report says "no logged activity in CRM" not "no activity happened"
-- Designed for a single deal pipeline — multi-pipeline support requires code modification
-- HubSpot Free does not expose a full Leads object — contacts are treated as leads in this setup
-- Forecast confidence is rule-based, not a statistical model
-- The workflow treats contacts created within the configured window as recent leads — adjust the date filter in Fetch Recent Contacts for longer history
-
----
-
 ## 🗺️ Roadmap
 
 - [ ] Multi-pipeline support
